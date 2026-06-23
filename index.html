@@ -282,6 +282,37 @@ h3 {
   line-height: 1.55;
 }
 
+.answer-sheet {
+  display: grid;
+  gap: 12px;
+}
+
+.answer-sheet label {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.fill-input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #fff;
+}
+
+.answer-part-card {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafbfc;
+}
+
+.answer-part-card strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
 .option-list {
   display: grid;
   gap: 10px;
@@ -3953,12 +3984,33 @@ window.QUESTIONS = [
     return q.answer.map((key) => optionText(q, key)).join("；");
   }
 
+  function normalizeText(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/[，,；;、]/g, "")
+      .replace(/[（(]/g, "(")
+      .replace(/[）)]/g, ")")
+      .replace(/μ/g, "u")
+      .replace(/µ/g, "u")
+      .toLowerCase();
+  }
+
+  function getSubjectiveAnswers() {
+    return Array.from(questionCard.querySelectorAll("[data-answer-part]")).map((input) => input.value.trim());
+  }
+
   function normalize(keys) {
     return keys.slice().sort().join("|");
   }
 
   function isCorrect(q, selected) {
-    if (["fill", "short"].includes(q.type)) {
+    if (q.type === "fill") {
+      const expected = Array.isArray(q.answerParts) ? q.answerParts : [];
+      if (!Array.isArray(selected) || selected.length !== expected.length) return false;
+      return expected.every((part, index) => normalizeText(selected[index]) === normalizeText(part));
+    }
+    if (q.type === "short") {
       return true;
     }
     return normalize(selected) === normalize(q.answer);
@@ -3969,10 +4021,24 @@ window.QUESTIONS = [
   }
 
   function renderAnswerSection(q, item, inputType, saved, disabled, result) {
-    if (q.type === "fill" || q.type === "short") {
+    if (q.type === "fill") {
+      const answerParts = Array.isArray(q.answerParts) && q.answerParts.length ? q.answerParts : [""];
+      const values = Array.isArray(saved) && saved.length ? saved : new Array(answerParts.length).fill("");
       return `
         <div class="answer-sheet">
-          <p class="muted">当前按原题型展示。此题型暂不支持在线输入判分，点击“提交”后可查看参考答案。</p>
+          ${answerParts.map((_, index) => `
+            <label>
+              第${index + 1}空
+              <input class="fill-input" data-answer-part="${index}" type="text" value="${escapeAttr(values[index] || "")}" ${disabled ? "disabled" : ""}>
+            </label>
+          `).join("")}
+        </div>
+      `;
+    }
+    if (q.type === "short") {
+      return `
+        <div class="answer-sheet">
+          <p class="muted">当前按原题型展示。简答题暂不支持在线判分，点击“提交”后可查看参考答案。</p>
         </div>
       `;
     }
@@ -4149,11 +4215,21 @@ window.QUESTIONS = [
 
   function renderFeedback(q, correct) {
     const subjective = ["fill", "short"].includes(q.type);
-    const statusClass = subjective ? "good" : (correct ? "good" : "bad");
-    const statusText = subjective ? "参考答案" : (correct ? "回答正确" : "回答错误");
+    const statusClass = subjective ? (correct ? "good" : "bad") : (correct ? "good" : "bad");
+    const statusText = subjective ? (correct ? "填写正确" : "填写不正确") : (correct ? "回答正确" : "回答错误");
+    const answerLabel = q.type === "short" ? "参考答案：" : "正确答案：";
+    const answerDetail = (q.type === "fill" || q.type === "short") && Array.isArray(q.answerParts) && q.answerParts.length
+      ? `<div class="answer-sheet">${q.answerParts.map((part, index) => `
+          <div class="answer-part-card">
+            <strong>${q.type === "fill" ? `第${index + 1}空` : `要点${index + 1}`}</strong>
+            <span>${escapeHtml(part)}</span>
+          </div>
+        `).join("")}</div>`
+      : `<p class="answer-line">${answerLabel}${escapeHtml(answerText(q))}</p>`;
     return `
       <div class="feedback ${statusClass}">
-        <p class="answer-line">${statusText} · ${subjective ? "答案：" : "正确答案："}${escapeHtml(answerText(q))}</p>
+        ${subjective ? `<p class="answer-line">${statusText}</p>` : `<p class="answer-line">${statusText} · 正确答案：${escapeHtml(answerText(q))}</p>`}
+        ${subjective ? answerDetail : ""}
         ${q.explanation ? `<p class="explanation">${escapeHtml(q.explanation)}</p>` : ""}
       </div>
     `;
@@ -4162,8 +4238,27 @@ window.QUESTIONS = [
   function submitCurrent() {
     const item = state.queue[state.index];
     const q = item.question;
+    if (q.type === "fill") {
+      const selected = getSubjectiveAnswers();
+      if (selected.every((value) => !value)) {
+        alert("请先填写答案。");
+        return;
+      }
+      const correct = isCorrect(q, selected);
+      state.answers.set(q.id, selected);
+      if (!correct) {
+        state.currentWrongIds.add(q.id);
+        const wrongIds = readWrongIds();
+        wrongIds.add(q.id);
+        writeWrongIds(wrongIds);
+        updateHeader();
+      }
+      state.results.set(q.id, { correct, selected });
+      renderQuestion();
+      return;
+    }
     const selected = getSelectedKeys();
-    if (["fill", "short"].includes(q.type)) {
+    if (q.type === "short") {
       state.answers.set(q.id, []);
       state.results.set(q.id, { correct: true, selected: [] });
       renderQuestion();
